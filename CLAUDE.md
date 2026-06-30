@@ -53,10 +53,14 @@ informed-app/
 ├── frontend/                  # The only running code. Next.js 16 + React 19 (App Router)
 │   ├── app/
 │   │   ├── page.tsx           # THE ENTIRE APP — ~600 lines, one client component
-│   │   ├── layout.tsx         # Root layout (still has default create-next-app metadata)
+│   │   ├── layout.tsx         # Root layout + site metadata
 │   │   ├── globals.css        # @tailwind directives (utilities largely unused — see Styling)
-│   │   └── api/test-db/route.ts  # Supabase connectivity smoke-test endpoint
+│   │   └── api/
+│   │       ├── elections/route.ts  # zip → upcoming elections (Google Civic, server-side)
+│   │       └── test-db/route.ts    # Supabase connectivity smoke-test endpoint
 │   ├── lib/supabase.ts        # Supabase browser client (publishable/anon key)
+│   ├── lib/civic.ts           # Google Civic API client (SERVER ONLY — secret key)
+│   ├── next.config.ts         # Security headers (HSTS, CSP, etc.) for all routes
 │   └── package.json           # name is "frontend-next"
 ├── backend/                   # EMPTY (.gitkeep only). No Express server exists yet.
 ├── db/migrations/             # SQL migrations + per-migration READMEs
@@ -214,7 +218,11 @@ Follow the pattern in `2026-05-11_soft_data_tables_*.sql` /
   under RLS: owner-only (`auth.uid()`) policies on the 5 user-scoped tables,
   public read-only on the 11 public-data tables. Writes to public data stay
   `service_role`-only. See `db/migrations/2026-06-30_*`.
-- Security headers needed: HSTS, CSP. **(Now the top queued security item.)**
+- ~~Security headers (HSTS, CSP)~~ — **DONE (2026-06-30).** Set for all routes in
+  `frontend/next.config.ts` (also X-Content-Type-Options, Referrer-Policy,
+  X-Frame-Options, Permissions-Policy). CSP allows inline styles + Supabase;
+  `'unsafe-eval'`/`ws:` are dev-only for HMR. Tighten script-src with nonces
+  later if wanted.
 - Supabase free tier has **no automated backups** — acceptable during dev (no
   real users). **Upgrade to Pro ($25/mo) trigger: first real user with real
   data.** Add to the pre-launch checklist.
@@ -226,11 +234,13 @@ Follow the pattern in `2026-05-11_soft_data_tables_*.sql` /
 
 1. ~~**RLS hardening** on the user-scoped tables~~ — **DONE 2026-06-30** (all 16
    tables under RLS; see security section + `db/migrations/2026-06-30_*`).
-2. **zip-code → upcoming-elections lookup** — Function 1's smallest end-to-end
-   slice and the first live Google Civic API integration replacing mock data
-   (run via the spec→issues pipeline below). **← next up.**
-3. **Security headers** (HSTS, CSP) in `next.config.ts` — small, do alongside
-   the Vercel deploy prep.
+2. **zip-code → upcoming-elections lookup** — **first slice landed (2026-06-30).**
+   `/api/elections` calls Google Civic server-side (key stays secret) and the
+   races screen renders live elections with graceful fallback to labeled sample
+   data. **Still to do:** add a real `GOOGLE_CIVIC_API_KEY` to
+   `frontend/.env.local`; then location-specific filtering + candidate matching
+   via `voterInfoQuery(zip)` (the natural next PRD).
+3. ~~**Security headers**~~ — **DONE 2026-06-30** (see security section).
 
 **Later pipeline:** `candidate_bills` schema improvements → Vercel deploy →
 security headers + PWA config → Phase 3 eval build → Supabase Pro (on first real
