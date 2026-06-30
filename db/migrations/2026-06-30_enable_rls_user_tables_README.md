@@ -2,108 +2,74 @@
 
 ## What this migration does
 
-Enables Row-Level Security (RLS) and adds **owner-only** access policies on the
-five user-scoped tables. This clears the active Supabase RLS dashboard warnings
-and is sequenced **before the first Vercel deploy** (the top queued item in
-`CLAUDE.md`).
+Enables Row-Level Security (RLS) and defines **owner-only** policies on the five
+user-scoped tables, matched against `auth.uid()`. This clears the active Supabase
+RLS dashboard warnings and is sequenced **before the first Vercel deploy**.
 
-| Table                   | RLS | Browser-key (anon) access granted        |
-|-------------------------|-----|------------------------------------------|
-| `users`                 | ON  | SELECT, UPDATE own row (`id = auth.uid()`) |
-| `voter_registrations`   | ON  | ALL own rows (`user_id = auth.uid()`)    |
-| `tracked_candidates`    | ON  | ALL own rows                             |
-| `user_promises_tracker` | ON  | ALL own rows                             |
-| `user_notifications`    | ON  | SELECT, UPDATE own rows                  |
+| Table                   | RLS | Browser-key (anon) policies                  |
+|-------------------------|-----|----------------------------------------------|
+| `users`                 | ON  | view, update own row (`auth.uid() = id`)     |
+| `voter_registrations`   | ON  | view, insert, update, delete own rows        |
+| `tracked_candidates`    | ON  | view, insert, update, delete own rows        |
+| `user_promises_tracker` | ON  | view, insert, update, delete own rows        |
+| `user_notifications`    | ON  | view, update own rows                        |
 
-Public-data tables (`elections`, `candidates`, and the candidate_* data tables)
-are intentionally **not** touched — they stay readable. If those still show
-"RLS disabled" warnings, the intended pattern is RLS-on + a public read-only
-`SELECT USING (true)` policy; that's a separate, follow-up migration.
+Pairs with `2026-06-30_public_read_rls` (public read on the 11 public-data
+tables). Together they put all 16 tables under RLS.
+
+## ⚠️ History — read this before re-running
+
+This migration was **reconciled after first application**. When first run against
+the live Supabase DB, those five tables **already had** a set of plain-English
+policies (`"Users can view own ..."`, etc.) created in an earlier session that
+was never committed here. An interim version of this script added a *parallel*
+set (`*_owner_all`, `*_select_own`, `*_update_own`), creating duplicates. The
+duplicates were verified harmless (same `auth.uid()` ownership check) and then
+dropped.
+
+This file now reflects the **canonical final state**: RLS on + the plain-English
+policy set. It is idempotent and also drops the interim names, so running it from
+any prior state converges to the same clean result. The live DB and this file are
+in sync as of 2026-06-30.
 
 ### How access works
 
-- Ownership is matched against `auth.uid()` — the id of the currently
-  authenticated Supabase user.
 - `users.id` **is** the auth user id (the table extends `auth.users`); the other
-  four tables carry a `user_id` column referencing it.
-- The **`service_role`** key bypasses RLS entirely. Server-side / backend writes
-  (e.g. system-generated `user_notifications`) use `service_role` and are
-  unaffected — RLS only constrains the anon/publishable (browser) key.
-- No browser INSERT/DELETE on `users` or `user_notifications`: user rows come
-  from the auth sign-up flow, and notifications are system-generated. Add
-  explicit policies later if user-side delete/dismiss is wanted.
+  four tables carry a `user_id` referencing it.
+- The **`service_role`** key bypasses RLS. Backend / system writes (e.g.
+  system-generated `user_notifications`) are unaffected — RLS only constrains the
+  anon/publishable (browser) key.
+- For UPDATE policies, Postgres reuses the `USING` condition as the write-check
+  when `WITH CHECK` is omitted, so a user cannot reassign a row to another user.
+- No browser INSERT/DELETE on `users` (auth-managed) or `user_notifications`
+  (system-generated).
 
-## ⚠️ Before applying — verify the column assumption
+## Applying
 
-The migration assumes each non-`users` table has a column named exactly
-`user_id` of type `uuid`. Confirm first:
+1. Supabase Studio → SQL Editor → paste `2026-06-30_enable_rls_user_tables_up.sql`
+   → **Run**. (Or `psql "$DATABASE_URL" -f ...`)
 
-```sql
-SELECT table_name, column_name, data_type
-FROM information_schema.columns
-WHERE table_schema = 'public'
-  AND table_name IN ('voter_registrations','tracked_candidates',
-                     'user_promises_tracker','user_notifications')
-  AND column_name = 'user_id'
-ORDER BY table_name;
--- Expected: 4 rows, all data_type = uuid
-```
-
-If any name differs, edit the `USING` / `WITH CHECK` clauses in the up script to
-match before running. Also take a Supabase backup first (Project Settings →
-Database → Backups).
-
-## Applying the migration
-
-### Option A: Supabase Studio SQL Editor (recommended)
-
-1. Open Supabase Studio → SQL Editor.
-2. Paste the contents of `2026-06-30_enable_rls_user_tables_up.sql`.
-3. Click **Run**, confirm the transaction committed with no errors.
-4. Run the verification queries below.
-
-### Option B: psql
-
-```bash
-psql "$DATABASE_URL" -f 2026-06-30_enable_rls_user_tables_up.sql
-```
-
-## Verification queries (run after applying)
+## Verification (matches the live state as confirmed on 2026-06-30)
 
 ```sql
--- RLS is enabled on all five tables (rowsecurity = true)
-SELECT relname, relrowsecurity
-FROM pg_class
-WHERE relname IN ('users','voter_registrations','tracked_candidates',
-                  'user_promises_tracker','user_notifications')
-ORDER BY relname;
--- Expected: 5 rows, all relrowsecurity = true
-
--- Policies exist on each table
 SELECT tablename, policyname, cmd
 FROM pg_policies
-WHERE schemaname = 'public'
+WHERE schemaname='public'
   AND tablename IN ('users','voter_registrations','tracked_candidates',
                     'user_promises_tracker','user_notifications')
 ORDER BY tablename, policyname;
--- Expected: users(2), voter_registrations(1), tracked_candidates(1),
---           user_promises_tracker(1), user_notifications(2)
 ```
 
-After this, also do a quick behavioral check: signed in as user A with the
-browser/anon client, confirm you can read your own rows and cannot read user
-B's rows.
+Expect only the plain-English policies:
+- `tracked_candidates` — 4 (view/insert/update/delete)
+- `user_promises_tracker` — 4
+- `voter_registrations` — 4
+- `users` — 2 (view/update)
+- `user_notifications` — 2 (view/update)
+
+No `*_owner_all` / `*_select_own` / `*_update_own` rows should appear.
 
 ## Rollback
 
-`2026-06-30_enable_rls_user_tables_down.sql` drops the policies and disables RLS.
-
-**Do NOT run the down migration** in any environment with real users or real
-data — it re-exposes user data to the browser key. It exists only to restore the
-exact pre-migration state during local development.
-
-## Not in this migration (deferred)
-
-- Public-read RLS policies for `elections` / `candidates` / candidate_* tables.
-- Security headers (HSTS, CSP) — app/edge config, not SQL.
-- Indexes on `user_id` columns (add when query patterns are known).
+`..._down.sql` drops the policies and disables RLS. **Do NOT run in production** —
+it re-exposes user data to the browser key. Development-only.

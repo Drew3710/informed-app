@@ -1,101 +1,133 @@
 -- =============================================================================
 -- Migration: 2026-06-30_enable_rls_user_tables (UP)
--- Purpose:   Enable Row-Level Security and add owner-only policies on the five
---            user-scoped tables. Clears the active Supabase RLS dashboard
+-- Purpose:   Enable Row-Level Security and define owner-only policies on the
+--            five user-scoped tables. Clears the Supabase RLS dashboard
 --            warnings and is sequenced BEFORE the first Vercel deploy.
 -- Author:    Andrew (with Claude)
 -- Reverses:  Run 2026-06-30_enable_rls_user_tables_down.sql
 -- =============================================================================
 --
--- WHAT THIS MIGRATION DOES:
---   Enables RLS and creates owner-only access policies on:
---     1. users                  (SELECT/UPDATE own row only)
---     2. voter_registrations    (full owner access)
---     3. tracked_candidates     (full owner access)
---     4. user_promises_tracker  (full owner access)
---     5. user_notifications     (SELECT/UPDATE own; inserts come from system)
+-- HISTORY / WHY THIS FILE LOOKS LIKE IT DOES:
+--   When first applied, the live DB was found to ALREADY contain a set of
+--   plain-English policies ("Users can view own ...", etc.), created in an
+--   earlier session that was never committed to this repo. An interim version
+--   of this migration added a parallel set (`*_owner_all`, `*_select_own`,
+--   `*_update_own`) which duplicated them. Those interim policies were dropped.
+--   This file now reproduces the CANONICAL final state: RLS on + the
+--   plain-English policy set. It also drops the interim names so re-running
+--   from any prior state converges to the same clean result.
 --
--- MODEL: Ownership is matched against auth.uid() (the authenticated user's id).
+-- MODEL: ownership is matched against auth.uid().
 --   - users.id IS the auth user id (this table extends auth.users).
 --   - the other four tables carry a user_id column referencing that id.
+--   - service_role bypasses RLS (backend/system writes are unaffected).
 --
--- WHO BYPASSES RLS: the service_role key bypasses RLS entirely. Server-side /
---   backend writes (e.g. system-generated notifications) use service_role and
---   are unaffected. RLS only constrains the anon/publishable (browser) key.
---
--- SAFETY: Wrapped in a transaction. If any step fails, ALL changes roll back.
--- IDEMPOTENT: ENABLE RLS is a no-op if already on; every policy is dropped
---   with IF EXISTS before being recreated, so re-running is safe.
---
--- ⚠️ ASSUMPTION TO VERIFY before running: the four non-users tables each have a
---   column named exactly `user_id` of type uuid. If a name differs, adjust the
---   USING/WITH CHECK clauses below to match. Run the inventory query in the
---   README first.
+-- SAFETY: Wrapped in a transaction. IDEMPOTENT — every policy is dropped
+--   IF EXISTS before being (re)created, and ENABLE RLS is a no-op if already on.
 -- =============================================================================
 
-BEGIN;  -- Start transaction. Nothing is committed until COMMIT at the end.
+BEGIN;
+
+-- Drop any interim duplicate policies from the superseded version of this
+-- migration (no-ops if they don't exist).
+DROP POLICY IF EXISTS users_select_own ON users;
+DROP POLICY IF EXISTS users_update_own ON users;
+DROP POLICY IF EXISTS voter_registrations_owner_all ON voter_registrations;
+DROP POLICY IF EXISTS tracked_candidates_owner_all ON tracked_candidates;
+DROP POLICY IF EXISTS user_promises_tracker_owner_all ON user_promises_tracker;
+DROP POLICY IF EXISTS user_notifications_select_own ON user_notifications;
+DROP POLICY IF EXISTS user_notifications_update_own ON user_notifications;
 
 -- -----------------------------------------------------------------------------
--- 1 of 5: users
--- A user may read and update only their own row. No INSERT/DELETE policy:
--- rows are created by the Supabase auth sign-up flow (service_role), and
--- account deletion is handled through auth, not the browser client.
+-- 1 of 5: users  — read/update own row only. Rows are created by the Supabase
+-- auth sign-up flow (service_role); deletion is handled through auth.
 -- -----------------------------------------------------------------------------
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS users_select_own ON users;
-CREATE POLICY users_select_own ON users
-  FOR SELECT USING (id = auth.uid());
+DROP POLICY IF EXISTS "Users can view own data" ON users;
+CREATE POLICY "Users can view own data" ON users
+  FOR SELECT USING (auth.uid() = id);
 
-DROP POLICY IF EXISTS users_update_own ON users;
-CREATE POLICY users_update_own ON users
-  FOR UPDATE USING (id = auth.uid()) WITH CHECK (id = auth.uid());
+DROP POLICY IF EXISTS "Users can update own data" ON users;
+CREATE POLICY "Users can update own data" ON users
+  FOR UPDATE USING (auth.uid() = id);
 
 -- -----------------------------------------------------------------------------
--- 2 of 5: voter_registrations  — full owner access (the user owns these rows)
+-- 2 of 5: voter_registrations  — full owner access (view/insert/update/delete).
 -- -----------------------------------------------------------------------------
 ALTER TABLE voter_registrations ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS voter_registrations_owner_all ON voter_registrations;
-CREATE POLICY voter_registrations_owner_all ON voter_registrations
-  FOR ALL USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+DROP POLICY IF EXISTS "Users can view own registrations" ON voter_registrations;
+CREATE POLICY "Users can view own registrations" ON voter_registrations
+  FOR SELECT USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can insert own registrations" ON voter_registrations;
+CREATE POLICY "Users can insert own registrations" ON voter_registrations
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can update own registrations" ON voter_registrations;
+CREATE POLICY "Users can update own registrations" ON voter_registrations
+  FOR UPDATE USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can delete own registrations" ON voter_registrations;
+CREATE POLICY "Users can delete own registrations" ON voter_registrations
+  FOR DELETE USING (auth.uid() = user_id);
 
 -- -----------------------------------------------------------------------------
--- 3 of 5: tracked_candidates  — full owner access
+-- 3 of 5: tracked_candidates  — full owner access.
 -- -----------------------------------------------------------------------------
 ALTER TABLE tracked_candidates ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS tracked_candidates_owner_all ON tracked_candidates;
-CREATE POLICY tracked_candidates_owner_all ON tracked_candidates
-  FOR ALL USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+DROP POLICY IF EXISTS "Users can view own tracked candidates" ON tracked_candidates;
+CREATE POLICY "Users can view own tracked candidates" ON tracked_candidates
+  FOR SELECT USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can insert own tracked candidates" ON tracked_candidates;
+CREATE POLICY "Users can insert own tracked candidates" ON tracked_candidates
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can update own tracked candidates" ON tracked_candidates;
+CREATE POLICY "Users can update own tracked candidates" ON tracked_candidates
+  FOR UPDATE USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can delete own tracked candidates" ON tracked_candidates;
+CREATE POLICY "Users can delete own tracked candidates" ON tracked_candidates
+  FOR DELETE USING (auth.uid() = user_id);
 
 -- -----------------------------------------------------------------------------
--- 4 of 5: user_promises_tracker  — full owner access
+-- 4 of 5: user_promises_tracker  — full owner access.
 -- -----------------------------------------------------------------------------
 ALTER TABLE user_promises_tracker ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS user_promises_tracker_owner_all ON user_promises_tracker;
-CREATE POLICY user_promises_tracker_owner_all ON user_promises_tracker
-  FOR ALL USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+DROP POLICY IF EXISTS "Users can view own promise tracking" ON user_promises_tracker;
+CREATE POLICY "Users can view own promise tracking" ON user_promises_tracker
+  FOR SELECT USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can insert own promise tracking" ON user_promises_tracker;
+CREATE POLICY "Users can insert own promise tracking" ON user_promises_tracker
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can update own promise tracking" ON user_promises_tracker;
+CREATE POLICY "Users can update own promise tracking" ON user_promises_tracker
+  FOR UPDATE USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can delete own promise tracking" ON user_promises_tracker;
+CREATE POLICY "Users can delete own promise tracking" ON user_promises_tracker
+  FOR DELETE USING (auth.uid() = user_id);
 
 -- -----------------------------------------------------------------------------
--- 5 of 5: user_notifications
--- A user may read and update (e.g. mark-as-read) only their own notifications.
--- INSERTs are produced by the system (service_role, which bypasses RLS), so no
--- INSERT policy is granted to the browser client. No DELETE policy either —
--- if user-side dismissal/delete is wanted later, add an explicit DELETE policy.
+-- 5 of 5: user_notifications  — read + update (mark-as-read) own rows.
+-- INSERTs are system-generated (service_role, bypasses RLS); no INSERT/DELETE
+-- policy is granted to the browser client.
 -- -----------------------------------------------------------------------------
 ALTER TABLE user_notifications ENABLE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS user_notifications_select_own ON user_notifications;
-CREATE POLICY user_notifications_select_own ON user_notifications
-  FOR SELECT USING (user_id = auth.uid());
+DROP POLICY IF EXISTS "Users can view own notifications" ON user_notifications;
+CREATE POLICY "Users can view own notifications" ON user_notifications
+  FOR SELECT USING (auth.uid() = user_id);
 
-DROP POLICY IF EXISTS user_notifications_update_own ON user_notifications;
-CREATE POLICY user_notifications_update_own ON user_notifications
-  FOR UPDATE USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+DROP POLICY IF EXISTS "Users can update own notifications" ON user_notifications;
+CREATE POLICY "Users can update own notifications" ON user_notifications
+  FOR UPDATE USING (auth.uid() = user_id);
 
--- -----------------------------------------------------------------------------
--- Migration complete. Commit the transaction.
--- -----------------------------------------------------------------------------
 COMMIT;

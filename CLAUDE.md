@@ -210,9 +210,11 @@ Follow the pattern in `2026-05-11_soft_data_tables_*.sql` /
 
 ## Known security debt (clear before public launch)
 
-- **RLS not enabled on all tables** (dashboard warnings active) — top queued
-  item, now unblocked. The four user-scoped tables are the priority.
-- Security headers needed: HSTS, CSP.
+- ~~**RLS not enabled on all tables**~~ — **DONE (2026-06-30).** All 16 tables are
+  under RLS: owner-only (`auth.uid()`) policies on the 5 user-scoped tables,
+  public read-only on the 11 public-data tables. Writes to public data stay
+  `service_role`-only. See `db/migrations/2026-06-30_*`.
+- Security headers needed: HSTS, CSP. **(Now the top queued security item.)**
 - Supabase free tier has **no automated backups** — acceptable during dev (no
   real users). **Upgrade to Pro ($25/mo) trigger: first real user with real
   data.** Add to the pre-launch checklist.
@@ -222,12 +224,13 @@ Follow the pattern in `2026-05-11_soft_data_tables_*.sql` /
 
 **Immediately queued — pick one to start:**
 
-1. **RLS hardening** on `voter_registrations`, `tracked_candidates`,
-   `user_notifications`, `user_promises_tracker`. Sequenced before Vercel
-   deploy.
+1. ~~**RLS hardening** on the user-scoped tables~~ — **DONE 2026-06-30** (all 16
+   tables under RLS; see security section + `db/migrations/2026-06-30_*`).
 2. **zip-code → upcoming-elections lookup** — Function 1's smallest end-to-end
    slice and the first live Google Civic API integration replacing mock data
-   (run via the spec→issues pipeline below).
+   (run via the spec→issues pipeline below). **← next up.**
+3. **Security headers** (HSTS, CSP) in `next.config.ts` — small, do alongside
+   the Vercel deploy prep.
 
 **Later pipeline:** `candidate_bills` schema improvements → Vercel deploy →
 security headers + PWA config → Phase 3 eval build → Supabase Pro (on first real
