@@ -193,9 +193,38 @@ function HomePage({ onNavigate }: { onNavigate: (page: string, params?: Record<s
   );
 }
 
+interface RaceItem { id: string; name: string; electionDate: string; candidates?: number; }
+
 function RaceSelectionPage({ zip, onNavigate }: { zip: string; onNavigate: (page: string, params?: Record<string, unknown>) => void }) {
   const [loading, setLoading] = useState(true);
-  useEffect(() => { const t = setTimeout(() => setLoading(false), 800); return () => clearTimeout(t); }, []);
+  const [races, setRaces] = useState<RaceItem[]>([]);
+  const [isLive, setIsLive] = useState(false);
+
+  // Ask our server route for live elections (Google Civic). It keeps the API
+  // key server-side and returns source:"mock" when there's no key / no data /
+  // an upstream error — in which case we render the labeled sample races.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const res = await fetch(`/api/elections?zip=${encodeURIComponent(zip)}`);
+        const data = await res.json();
+        if (!active) return;
+        if (data.source === "live" && Array.isArray(data.elections) && data.elections.length > 0) {
+          setRaces(data.elections as RaceItem[]);
+          setIsLive(true);
+        } else {
+          setRaces(MOCK_RACES);
+          setIsLive(false);
+        }
+      } catch {
+        if (active) { setRaces(MOCK_RACES); setIsLive(false); }
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, [zip]);
 
   return (
     <div style={{ minHeight: "100vh", background: theme.bg }}>
@@ -210,9 +239,13 @@ function RaceSelectionPage({ zip, onNavigate }: { zip: string; onNavigate: (page
           <div style={{ textAlign: "center", padding: "60px 0", color: theme.textMuted }}><Icons.Loader /><p style={{ marginTop: "12px", fontSize: "14px" }}>Finding elections in your area...</p></div>
         ) : (
           <>
-            <SampleDataBanner />
+            {isLive ? (
+              <div style={{ background: theme.primaryBg, border: `1px solid ${theme.primarySoft}`, borderRadius: "8px", padding: "10px 16px", fontSize: "12px", color: theme.primary, fontWeight: 500, marginBottom: "20px", textAlign: "center" }}>Live from the Google Civic Information API — location-specific filtering is coming soon.</div>
+            ) : (
+              <SampleDataBanner />
+            )}
             <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-              {MOCK_RACES.map((race, i) => (
+              {races.map((race, i) => (
                 <FadeIn key={race.id} delay={i * 80}>
                   <button onClick={() => onNavigate("candidates", { zip, raceId: race.id, raceName: race.name, electionDate: race.electionDate })}
                     style={{ width: "100%", textAlign: "left" as const, padding: "18px 22px", background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: "10px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", transition: "border-color 0.2s, background 0.2s", fontFamily: "inherit" }}
@@ -221,7 +254,7 @@ function RaceSelectionPage({ zip, onNavigate }: { zip: string; onNavigate: (page
                     <div>
                       <div style={{ fontWeight: 600, fontSize: "15px", color: theme.text }}>{race.name}</div>
                       <div style={{ fontSize: "13px", color: theme.textMuted, marginTop: "3px", display: "flex", alignItems: "center", gap: "12px" }}>
-                        <span>{race.candidates} candidate{race.candidates !== 1 ? "s" : ""}</span>
+                        {typeof race.candidates === "number" && <span>{race.candidates} candidate{race.candidates !== 1 ? "s" : ""}</span>}
                         <span style={{ display: "flex", alignItems: "center", gap: "4px" }}><Icons.Calendar /> {race.electionDate}</span>
                       </div>
                     </div>
@@ -268,13 +301,23 @@ function CandidateListPage({ zip, raceId, raceName, electionDate, onNavigate }: 
             <span style={{ display: "flex", alignItems: "center", gap: "4px" }}><Icons.Calendar /> Election Day: {electionDate}</span>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "24px" }}>
-            <p style={{ color: theme.textSecondary, fontSize: "14px", margin: 0 }}>{candidates.length} candidates • Information from official government sources</p>
-            <button onClick={() => { setCompareMode(!compareMode); setSelected([]); }}
-              style={{ padding: "6px 14px", fontSize: "13px", fontWeight: 600, background: compareMode ? theme.primary : "transparent", color: compareMode ? "#fff" : theme.primary, border: `1px solid ${compareMode ? theme.primary : theme.border}`, borderRadius: "6px", cursor: "pointer", fontFamily: "inherit" }}>
-              {compareMode ? "Cancel" : "Compare"}
-            </button>
+            <p style={{ color: theme.textSecondary, fontSize: "14px", margin: 0 }}>{candidates.length > 0 ? `${candidates.length} candidates • Information from official government sources` : "Candidate profiles for this election are being curated"}</p>
+            {candidates.length > 1 && (
+              <button onClick={() => { setCompareMode(!compareMode); setSelected([]); }}
+                style={{ padding: "6px 14px", fontSize: "13px", fontWeight: 600, background: compareMode ? theme.primary : "transparent", color: compareMode ? "#fff" : theme.primary, border: `1px solid ${compareMode ? theme.primary : theme.border}`, borderRadius: "6px", cursor: "pointer", fontFamily: "inherit" }}>
+                {compareMode ? "Cancel" : "Compare"}
+              </button>
+            )}
           </div>
         </FadeIn>
+        {candidates.length === 0 ? (
+          <div style={{ textAlign: "center", padding: "48px 24px", color: theme.textMuted, background: theme.surface, borderRadius: "12px", border: `1px solid ${theme.border}` }}>
+            <div style={{ width: "44px", height: "44px", borderRadius: "10px", background: theme.primaryBg, display: "flex", alignItems: "center", justifyContent: "center", color: theme.primary, margin: "0 auto 14px" }}><Icons.Users /></div>
+            <p style={{ fontSize: "15px", color: theme.text, fontWeight: 600, margin: "0 0 4px" }}>Candidate profiles are on the way</p>
+            <p style={{ fontSize: "13px", margin: 0, lineHeight: 1.5 }}>We&apos;re curating verified candidate information for this election from official government sources. Check back soon.</p>
+          </div>
+        ) : (
+        <>
         <SampleDataBanner />
         <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
           {candidates.map((c, i) => (
@@ -305,6 +348,8 @@ function CandidateListPage({ zip, raceId, raceName, electionDate, onNavigate }: 
             </FadeIn>
           ))}
         </div>
+        </>
+        )}
         {compareMode && selected.length > 0 && (
           <div style={{ position: "fixed", bottom: "24px", left: "50%", transform: "translateX(-50%)", background: theme.primary, color: "#fff", padding: "12px 24px", borderRadius: "12px", boxShadow: "0 8px 28px rgba(0,0,0,0.18)", display: "flex", alignItems: "center", gap: "14px", zIndex: 100 }}>
             <span style={{ fontSize: "14px" }}>{selected.length} of 2 selected</span>
