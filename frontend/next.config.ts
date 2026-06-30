@@ -24,7 +24,9 @@ const csp = [
   `base-uri 'self'`,
   `form-action 'self'`,
   `object-src 'none'`,
-  `upgrade-insecure-requests`,
+  // Production only: in dev this makes browsers upgrade ws:->wss: on localhost,
+  // which breaks Next.js HMR.
+  ...(isDev ? [] : [`upgrade-insecure-requests`]),
 ].join("; ");
 
 const securityHeaders = [

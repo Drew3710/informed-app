@@ -28,7 +28,9 @@ export async function GET(request: Request) {
     // but not used to narrow results. voterInfoQuery(zip) is the next slice.
     return NextResponse.json({ source: "live", zip, elections });
   } catch (err) {
-    // Any upstream failure degrades to sample data rather than breaking the UI.
-    return NextResponse.json({ source: "mock", reason: String(err), elections: [] });
+    // Log details server-side only; return a stable reason code so we never echo
+    // raw error text (which can include the upstream URL + API key) to clients.
+    console.error("[/api/elections] Civic lookup failed:", err);
+    return NextResponse.json({ source: "mock", reason: "upstream_error", elections: [] });
   }
 }

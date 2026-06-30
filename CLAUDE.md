@@ -187,9 +187,12 @@ applied to the live DB and committed**:
   `candidate_bills` has a queued ENUM/normalization/index audit.
   `candidate_activity_log` is load-bearing for `user_notifications` via FK.
 
-RLS is enabled on user-scoped tables (`users`, `voter_registrations`,
-`tracked_candidates`, `user_notifications`, `user_promises_tracker`) and disabled
-on public data (`elections`, `candidates`, etc.). Preserve this.
+RLS is enabled on **all** tables (as of 2026-06-30): owner-only (`auth.uid()`)
+policies on the user-scoped tables (`users`, `voter_registrations`,
+`tracked_candidates`, `user_notifications`, `user_promises_tracker`) and public
+read-only (`public_read`) policies on the public-data tables (`elections`,
+`candidates`, etc.) — writes to public data stay `service_role`-only. Preserve
+this.
 
 ### Migration discipline
 

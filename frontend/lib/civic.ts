@@ -1,3 +1,7 @@
+// Build-time guard: importing this module from a Client Component throws, so the
+// GOOGLE_CIVIC_API_KEY it reads can never be bundled into browser code.
+import "server-only";
+
 // =============================================================================
 // Google Civic Information API client — SERVER ONLY.
 // -----------------------------------------------------------------------------
@@ -53,10 +57,12 @@ export async function fetchUpcomingElections(): Promise<CivicElection[]> {
     }[];
   };
 
-  const today = new Date().toISOString().slice(0, 10);
+  // One-day grace window in UTC: an election that is still "today" in a U.S. time
+  // zone must not be dropped just because UTC has already ticked to tomorrow.
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   return (data.elections ?? [])
     .filter((e) => e.id !== "2000") // Google's permanent VIP test election
-    .filter((e) => e.electionDay >= today)
+    .filter((e) => e.electionDay >= cutoff)
     .map((e) => ({
       id: e.id,
       name: e.name,
